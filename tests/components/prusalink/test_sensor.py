@@ -1,6 +1,6 @@
 """Test Prusalink sensors."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
 
@@ -25,8 +25,9 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+from homeassistant.util.dt import utcnow
 
-from tests.common import MockConfigEntry
+from tests.common import MockConfigEntry, async_fire_time_changed
 
 
 @pytest.fixture(autouse=True)
@@ -334,6 +335,39 @@ async def test_axis_x_y_not_created_when_absent(
 
     assert hass.states.get("sensor.workshop_mock_title_x_position") is None
     assert hass.states.get("sensor.workshop_mock_title_y_position") is None
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+async def test_axis_x_y_unavailable_when_dropped_after_setup(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_api: None,
+    mock_get_status_idle: dict[str, Any],
+) -> None:
+    """X and Y go unavailable when the printer stops reporting the axis fields.
+
+    Buddy firmware drops both from /api/v1/status while printing, keeping axis_z.
+    """
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    del mock_get_status_idle["printer"]["axis_x"]
+    del mock_get_status_idle["printer"]["axis_y"]
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=30), fire_all=True)
+    await hass.async_block_till_done()
+
+    for axis in ("x", "y"):
+        state = hass.states.get(f"sensor.workshop_mock_title_{axis}_position")
+        assert state.state == STATE_UNAVAILABLE
+    assert hass.states.get("sensor.workshop_mock_title_z_height").state == "1.8"
+
+    mock_get_status_idle["printer"]["axis_x"] = 7.9
+    mock_get_status_idle["printer"]["axis_y"] = 8.4
+    async_fire_time_changed(hass, utcnow() + timedelta(seconds=60), fire_all=True)
+    await hass.async_block_till_done()
+
+    for axis, value in (("x", "7.9"), ("y", "8.4")):
+        state = hass.states.get(f"sensor.workshop_mock_title_{axis}_position")
+        assert state.state == value
 
 
 @pytest.mark.usefixtures("entity_registry_enabled_by_default")
